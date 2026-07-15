@@ -84,30 +84,25 @@ export default async function RefuelsPage({
         <RefuelEntryForm cars={cars} currentPrice={currentPrice} />
       </div>
 
-      {/* Incompleteness is a first-class fact, not hidden: other drivers won't
-          log fills, so this page is a floor, never a total. */}
-      <div className="rounded-lg border border-[var(--tt-border)] bg-[var(--tt-surface)] px-3 py-2 text-xs text-[var(--tt-muted)]">
-        Logged refuels only — <span className="text-foreground">not total spend</span>.
-        Multiple drivers use this car and logging is voluntary, so fills are
-        missing. Litres are derived exactly from the month&apos;s government-set
-        UAE price.
-        {excludedIntervals > 0 && (
-          <>
-            {" "}
+      {/* Gaps stay legible: surface excluded intervals / probable refuels when
+          there are any, without the standing "not total spend" preamble. */}
+      {(excludedIntervals > 0 || probableStops.length > 0) && (
+        <div className="rounded-lg border border-[var(--tt-border)] bg-[var(--tt-surface)] px-3 py-2 text-xs text-[var(--tt-muted)]">
+          {excludedIntervals > 0 && (
             <span className="text-[#f5a524]">
               {excludedIntervals} cross-check interval
               {excludedIntervals === 1 ? "" : "s"} excluded (suspected gap).
             </span>
-          </>
-        )}
-        {probableStops.length > 0 && (
-          <>
-            {" "}
-            {probableStops.length} probable-refuel stop
-            {probableStops.length === 1 ? "" : "s"} detected from GPS.
-          </>
-        )}
-      </div>
+          )}
+          {probableStops.length > 0 && (
+            <>
+              {" "}
+              {probableStops.length} probable-refuel stop
+              {probableStops.length === 1 ? "" : "s"} detected from GPS.
+            </>
+          )}
+        </div>
+      )}
 
       {refuels.length === 0 && windows.length === 0 ? (
         <div className="rounded-xl border border-[var(--tt-border)] bg-[var(--tt-surface)] p-8 text-center text-sm text-[var(--tt-muted)]">

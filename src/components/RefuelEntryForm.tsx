@@ -131,22 +131,12 @@ export default function RefuelEntryForm({
         Filled to full (required for the tank-to-tank check)
       </label>
 
-      {/* Live derived-litres preview so the entry can be sanity-checked. */}
-      <p className="mt-3 text-xs text-[var(--tt-muted)]">
-        {price != null ? (
-          previewLitres != null ? (
-            <>
-              ≈ <span className="font-medium text-foreground">{fmtNum(previewLitres, 2)} L</span>{" "}
-              at {fmtNum(price, 3)} AED/L (this month&apos;s price). The database
-              re-derives this exactly on save.
-            </>
-          ) : (
-            <>Litres are derived from amount ÷ {fmtNum(price, 3)} AED/L on save.</>
-          )
-        ) : (
-          <>No fuel price on record for this month yet — litres will backfill once it&apos;s added.</>
-        )}
-      </p>
+      {/* Live derived-litres figure so the entry can be sanity-checked. */}
+      {previewLitres != null && (
+        <p className="mt-3 text-xs text-[var(--tt-muted)]">
+          ≈ <span className="font-medium text-foreground">{fmtNum(previewLitres, 2)} L</span>
+        </p>
+      )}
 
       {error && <p className="mt-2 text-xs text-[#f87171]">{error}</p>}
 
