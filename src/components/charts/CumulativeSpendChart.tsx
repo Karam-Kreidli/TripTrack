@@ -26,15 +26,15 @@ export default function CumulativeSpendChart({
   const data = useMemo(() => {
     let running = 0;
     return [...refuels]
-      .filter((r) => r.cost_est_aed != null)
+      .filter((r) => r.amount_paid_aed != null)
       .sort(
         (a, b) =>
-          new Date(a.detected_at).getTime() - new Date(b.detected_at).getTime()
+          new Date(a.refueled_at).getTime() - new Date(b.refueled_at).getTime()
       )
       .map((r) => {
-        running += Number(r.cost_est_aed);
+        running += Number(r.amount_paid_aed);
         return {
-          label: fmtDate(r.detected_at),
+          label: fmtDate(r.refueled_at),
           value: Math.round(running * 100) / 100,
         };
       });
@@ -50,7 +50,10 @@ export default function CumulativeSpendChart({
           : "rounded-xl border border-[var(--tt-border)] bg-[var(--tt-surface)] p-4"
       }
     >
-      <h2 className="mb-3 text-sm font-semibold">Cumulative pump spend (AED)</h2>
+      <h2 className="mb-3 text-sm font-semibold">
+        Cumulative logged spend (AED)
+        <span className="ml-1 font-normal text-[var(--tt-muted)]">— a floor, not total</span>
+      </h2>
       {data.length === 0 ? (
         <p className="py-16 text-center text-sm text-[var(--tt-muted)]">
           No refuels in this period.

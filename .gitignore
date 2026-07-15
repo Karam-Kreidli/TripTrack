@@ -1,5 +1,8 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
+# Cygwin/MSYS crash dumps (junk)
+*.stackdump
+
 # dependencies
 /node_modules
 /.pnp

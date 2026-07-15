@@ -1,16 +1,11 @@
 import { fmtDateTime, fmtNum } from "@/lib/format";
 import type { Refuel } from "@/types/db";
 
-function levelArrow(before: number | null, after: number | null): string {
-  if (before == null || after == null) return "—";
-  return `${fmtNum(before, 0)}% → ${fmtNum(after, 0)}%`;
-}
-
 export default function RefuelLog({ refuels }: { refuels: Refuel[] }) {
   if (refuels.length === 0) {
     return (
       <p className="rounded-xl border border-[var(--tt-border)] bg-[var(--tt-surface)] p-8 text-center text-sm text-[var(--tt-muted)]">
-        No refuels detected in this period.
+        No refuels logged in this period.
       </p>
     );
   }
@@ -21,9 +16,10 @@ export default function RefuelLog({ refuels }: { refuels: Refuel[] }) {
         <thead>
           <tr className="border-b border-[var(--tt-border)] text-left text-xs text-[var(--tt-muted)]">
             <th className="px-3 py-2.5 font-medium">Date</th>
-            <th className="px-3 py-2.5 font-medium">Tank level</th>
-            <th className="px-3 py-2.5 text-right font-medium">Litres added (est)</th>
-            <th className="px-3 py-2.5 text-right font-medium">Cost (AED)</th>
+            <th className="px-3 py-2.5 text-right font-medium">AED paid</th>
+            <th className="px-3 py-2.5 text-right font-medium">Litres (derived)</th>
+            <th className="px-3 py-2.5 text-right font-medium">Odometer</th>
+            <th className="px-3 py-2.5 font-medium">Full tank</th>
             <th className="px-3 py-2.5 font-medium">Location</th>
           </tr>
         </thead>
@@ -34,16 +30,26 @@ export default function RefuelLog({ refuels }: { refuels: Refuel[] }) {
               className="border-b border-white/5 last:border-0 hover:bg-white/5"
             >
               <td className="px-3 py-2 whitespace-nowrap">
-                {fmtDateTime(r.detected_at)}
-              </td>
-              <td className="px-3 py-2 text-[var(--tt-muted)]">
-                {levelArrow(r.level_before_pct, r.level_after_pct)}
-              </td>
-              <td className="px-3 py-2 text-right">
-                {fmtNum(r.liters_added_est, 2)} L
+                {fmtDateTime(r.refueled_at)}
               </td>
               <td className="px-3 py-2 text-right font-medium text-[var(--tt-accent)]">
-                {fmtNum(r.cost_est_aed, 2)}
+                {fmtNum(r.amount_paid_aed, 2)}
+              </td>
+              <td className="px-3 py-2 text-right">
+                {r.liters_added != null ? `${fmtNum(r.liters_added, 2)} L` : "—"}
+                {r.liters_added_override != null && (
+                  <span className="ml-1 text-xs text-[var(--tt-muted)]">(exact)</span>
+                )}
+              </td>
+              <td className="px-3 py-2 text-right text-[var(--tt-muted)]">
+                {r.odometer_km != null ? `${fmtNum(r.odometer_km, 0)} km` : "—"}
+              </td>
+              <td className="px-3 py-2">
+                {r.is_full_tank ? (
+                  <span className="text-[var(--tt-muted)]">Full</span>
+                ) : (
+                  <span className="text-[#f5a524]">Partial</span>
+                )}
               </td>
               <td className="px-3 py-2 text-xs text-[var(--tt-muted)]">
                 {r.lat != null && r.lon != null ? (

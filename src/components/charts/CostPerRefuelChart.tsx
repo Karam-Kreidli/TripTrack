@@ -25,18 +25,18 @@ export default function CostPerRefuelChart({
   const data = useMemo(
     () =>
       [...refuels]
-        .filter((r) => r.cost_est_aed != null)
+        .filter((r) => r.amount_paid_aed != null)
         .sort(
           (a, b) =>
-            new Date(a.detected_at).getTime() -
-            new Date(b.detected_at).getTime()
+            new Date(a.refueled_at).getTime() -
+            new Date(b.refueled_at).getTime()
         )
         .map((r, i) => ({
           // Unique key per bar (same-day fills stay distinct); format the axis
           // date from the key itself, never by indexing back into `data`.
-          key: `${r.detected_at}#${i}`,
-          label: fmtDate(r.detected_at),
-          value: Number(r.cost_est_aed),
+          key: `${r.refueled_at}#${i}`,
+          label: fmtDate(r.refueled_at),
+          value: Number(r.amount_paid_aed),
         })),
     [refuels]
   );

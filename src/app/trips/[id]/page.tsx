@@ -85,8 +85,8 @@ export default async function TripDetailPage({
     .map((r) => ({
       lat: r.lat as number,
       lon: r.lon as number,
-      label: `Refuel · ${fmtNum(r.liters_added_est, 1)} L · ${fmtAED(
-        r.cost_est_aed
+      label: `Refuel · ${fmtNum(r.liters_added, 1)} L · ${fmtAED(
+        r.amount_paid_aed
       )}`,
     }));
 
@@ -112,7 +112,7 @@ export default async function TripDetailPage({
         <Item label="Cost" value={fmtAED(trip.cost_aed)} />
         <Item label="Avg speed" value={`${fmtNum(trip.avg_speed_kmh, 1)} km/h`} />
         <Item label="Max speed" value={`${fmtNum(trip.max_speed_kmh, 1)} km/h`} />
-        <Item label="Idle time" value={fmtDuration(trip.idle_seconds)} />
+        <Item label="In-leg idle" value={fmtDuration(trip.in_leg_idle_seconds)} />
         <Item label="Uploaded" value={fmtDateTime(trip.uploaded_at)} />
       </dl>
 

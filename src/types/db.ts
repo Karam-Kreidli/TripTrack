@@ -13,34 +13,43 @@ export interface Car {
   created_at: string;
 }
 
-// A refuel event: the OBD fuel level rose (driving only lowers it). Cost is
-// real money at the pump, distinct from the integrated per-trip estimate.
+// A refuel event: MANUAL entry keyed on amount paid. Litres are derived exactly
+// from the government-set UAE price on the refuel's date (not an estimate). The
+// data is permanently incomplete — multiple drivers, voluntary logging.
 export interface Refuel {
   id: number;
   client_refuel_id: string;
   car_id: number;
-  detected_at: string;
+  refueled_at: string;
+  entered_at: string;
+  amount_paid_aed: number; // primary input — what was actually paid
+  liters_added_override: number | null; // exact pump litres, if the user has them
+  liters_added: number | null; // derived (or override) — amount_paid_aed / price
+  odometer_km: number | null;
+  is_full_tank: boolean;
+  fuel_price_id: number | null;
   lat: number | null;
   lon: number | null;
-  level_before_pct: number | null;
-  level_after_pct: number | null;
-  liters_added_est: number | null;
-  fuel_price_id: number | null;
-  cost_est_aed: number | null;
   created_at: string;
 }
 
-// One tank-to-tank window: real-world consumption (litres at the later
-// refuel ÷ distance since the previous one) vs. the integrated trip estimate.
+// One tank-to-tank window: real-world consumption (litres pumped at the later
+// full fill ÷ distance) vs. the MAF-integrated trip estimate. A window is
+// INVALID (excluded from the check) when a refuel was likely missed — the only
+// independent check on the fuel estimate must refuse a number it can't stand
+// behind.
 export interface TankWindow {
   fromAt: string;
   toAt: string;
   distanceKm: number;
-  tankLiters: number; // litres added at the closing refuel
+  distanceSource: "odometer" | "trips"; // how distanceKm was measured
+  tankLiters: number; // litres pumped at the closing fill
   tankLper100: number | null;
-  integratedLiters: number; // Σ trips.fuel_used_liters in the window
+  integratedLiters: number; // MAF-integrated estimate over the window
   integratedLper100: number | null;
   driftPct: number | null; // (tank - integrated) / integrated × 100
+  valid: boolean;
+  invalidReason: string | null; // why it was excluded, if invalid
 }
 
 export interface FuelPrice {
@@ -60,7 +69,7 @@ export interface Trip {
   duration_seconds: number;
   distance_km: number;
   fuel_used_liters: number;
-  idle_seconds: number | null;
+  in_leg_idle_seconds: number | null;
   avg_speed_kmh: number | null;
   max_speed_kmh: number | null;
   start_lat: number | null;
@@ -114,6 +123,15 @@ export interface TripStop {
   dwell_seconds: number;
   idle_fuel_liters: number | null;
   idle_cost_aed: number | null;
+  probable_refuel: boolean | null; // looks like a fill-up (short engine-on stop at a station)
+}
+
+// A petrol station used for GPS probable-refuel matching.
+export interface FuelStation {
+  id: number;
+  name: string;
+  lat: number;
+  lon: number;
 }
 
 export interface MonthlySummary {

@@ -13,19 +13,77 @@ a delay, via a phone bridge — to Supabase. This repo is the **backend
 
 ## Setup
 
-1. Create a Supabase project and apply the three migrations in
+1. Create a Supabase project and apply the migrations in
    `supabase/migrations/` in order (via the SQL editor, `supabase db push`,
    or the Supabase MCP). They create the schema, seed the Koleos + the July
-   2026 fuel price, install the cost triggers, RLS, the `ingest_trip` RPC,
-   and the `monthly_summary` view.
+   2026 fuel price, install the cost triggers, RLS, the `ingest_trip` and
+   `ingest_refuel` / `add_car` RPCs, the `monthly_summary` view, and the
+   manual-refuel + gap-detection tables.
 2. `cp .env.example .env.local` and fill in your project URL and publishable
    key (Dashboard → Settings → API). Nothing is hardcoded; the app fails with
    a clear message if these are missing.
 3. `npm install && npm run dev` → http://localhost:3000
 
 The dashboard's key is **read-only**: RLS only grants `select` to `anon`.
-All writes go through `ingest_trip`, which only the secret (service-role) key
-may execute.
+All writes go through `SECURITY DEFINER` RPCs (`ingest_trip`, `ingest_refuel`,
+`add_car`) that only the secret (service-role) key may execute. The dashboard's
+own writes (logging a refuel, adding a car) run through **Next.js server
+actions** that hold the secret key **server-side** — it is never shipped to the
+browser. Set `SUPABASE_SECRET_KEY` in `.env.local` to enable those; reads work
+without it.
+
+## What the car actually exposes (measured, not assumed)
+
+A 45-minute real-world OBD survey of the actual car (Renault Koleos 2022,
+petrol; ESP32 + ELM327; 14,890 samples, 0–120 km/h, 23.8 km, 81% moving)
+established ground truth for what PIDs this vehicle supports. This settles
+several things the schema previously assumed. **Do not re-litigate these — they
+were measured.**
+
+Supported mode-01 PIDs: `0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x0C, 0x0D, 0x0E,
+0x0F, 0x10, 0x11, 0x13, 0x15, 0x1C, 0x1F, 0x21, 0x24, 0x2E, 0x30, 0x31, 0x3C,
+0x41, 0x42, 0x43, 0x44, 0x45, 0x47, 0x49, 0x4A, 0x4C, 0x4D, 0x4E, 0x51, 0xE0`.
+
+| PID | Name | Status |
+|---|---|---|
+| `0x10` | MAF | ✅ supported (0.57–56.12 g/s) — **basis for fuel** |
+| `0x0D` | Vehicle speed | ✅ supported (integer km/h) — basis for distance |
+| `0x0C` | Engine RPM | ✅ supported |
+| `0x44` | Commanded equivalence ratio (lambda) | ✅ supported — used in the fuel formula |
+| `0x0F` | Intake air temp | ✅ supported |
+| `0x04` | Engine load | ✅ supported |
+| `0x51` | Fuel type | ✅ returns `01` = Gasoline (confirms petrol) |
+| `0x5E` | Engine fuel rate | ❌ **NOT supported** — zero responses in 45 min |
+| `0x2F` | Fuel tank level | ❌ **NOT supported** — zero responses in 45 min |
+| `0x0B` | Intake MAP | ❌ not supported |
+| `0x5C` | Engine oil temp | ❌ not supported |
+
+**`fuel_used_liters` is MAF-derived, not a meter reading.** Because `0x5E`
+(direct fuel rate) doesn't exist on this car, the firmware computes fuel rate
+from MAF:
+
+```
+fuel_L_per_h = MAF_g_per_s / (14.7 × lambda) / 745 × 3600
+```
+
+- `14.7` = stoichiometric air-fuel ratio for petrol
+- `745` g/L = petrol density
+- `lambda` from PID `0x44`, defaulting to `1.0` when it reads 0
+
+Integrated over the real 45-minute drive this produced 23.82 km, 2.834 L →
+**11.90 L/100km** (AED 9.32 @ 3.29/L), with 1.87 L/h at idle — both realistic
+for this vehicle, so the method is sound. But it is an **estimate**, and its
+accuracy is quantified only by the tank-to-tank cross-check (see Refuels). The
+one validation so far is this single plausibility check against a real drive.
+
+**Distance source.** `0x0D` (vehicle speed) is supported but reports **integer
+km/h**, so distance integrated from it drifts. It is the authoritative source
+today; **GPS will be better once fitted**, and the two should be cross-checked
+when GPS lands.
+
+**Multi-ECU response quirk.** Several PIDs return the reply frame **twice**
+(e.g. `410C0F6E410C0F6E`) because more than one ECU answers. Parsers must take
+the **first** frame deliberately, not by accident.
 
 ## Cost calculation (authoritative, in-database)
 
@@ -81,7 +139,7 @@ them in firmware. The body wraps the trip in a `payload` field:
     "duration_seconds": 1355,
     "distance_km": 14.82,
     "fuel_used_liters": 1.213,
-    "idle_seconds": 210,
+    "in_leg_idle_seconds": 210,
     "avg_speed_kmh": 39.4,
     "max_speed_kmh": 92.0,
     "start_lat": 25.276987,
@@ -112,7 +170,7 @@ Field notes:
 | `car_id` | yes* | *Or send `device_id` instead; the RPC resolves the car from `cars.device_id`. |
 | `started_at`, `ended_at` | yes | ISO-8601 with offset. Send the real wall-clock offset (`+04:00`); cost pricing is done against the Dubai-local date. |
 | `duration_seconds`, `distance_km`, `fuel_used_liters` | yes | `l_per_100km` is derived in the database — don't send it. See the source note below on `distance_km` and `fuel_used_liters` — they're the two signals every headline number rests on. |
-| `idle_seconds` | no | **In-leg idle only** — engine-on-but-stationary time *within the moving legs* (traffic lights, brief halts below the stop threshold). It **excludes** flagged-stop dwell, which is carried separately by each stop's `dwell_seconds`. So total stationary time = `idle_seconds` + Σ `stops.dwell_seconds`; consequently `idle_seconds` can be (and usually is) **less** than any single stop's dwell. Don't conflate the two. |
+| `in_leg_idle_seconds` | no | **In-leg idle only** — engine-on-but-stationary time *within the moving legs* (traffic lights, brief halts below the stop threshold). It **excludes** flagged-stop dwell, which is carried separately by each stop's `dwell_seconds`. So total stationary time = `in_leg_idle_seconds` + Σ `stops.dwell_seconds`; consequently it can be (and usually is) **less** than any single stop's dwell. Don't conflate the two. (Renamed from the old ambiguous `idle_seconds`; the ingest RPC still accepts the legacy key.) |
 | `avg_speed_kmh`, `max_speed_kmh`, `start/end_lat/lon`, `notes` | no | `notes` is free-form JSON. |
 | `route_points[]` | no | `seq` starts at 0 and must be unique per trip; `speed_kmh` optional. |
 | `legs[]` | no | The moving segments between stops (A→B, B→C…). One ignition session with two stops = three legs; a stop-free trip has one leg or none. `seq` starts at 1. Send `distance_km` + `fuel_used_liters` from cumulative-odometer/fuel snapshots at each boundary — do **not** send `l_per_100km` or `cost_aed`; both are server-computed. |
@@ -151,10 +209,22 @@ sets the error floor.
   Which PIDs the Koleos (Renault/Samsung-derived) actually exposes is not
   safely assertable from memory; verify on the car, don't trust a spec sheet.
 
-### Legs & stops: the decomposition model
+### Trip boundaries: the leg is the real unit
 
-A **trip** is one ignition session (engine on → engine off). If you drive
-A→B→C without shutting the engine off, that's **one trip**, decomposed into:
+A **trip** is one ignition session (engine on → engine off). **In practice this
+driver does not switch the engine off** between errands or while refuelling, so:
+
+- A "trip" can span **many legs and a whole day** with a refuel in the middle.
+  The **leg — not the trip — is the meaningful unit of analysis**, and the
+  dashboard leans on legs accordingly.
+- Because the device is powered from an **ignition-switched supply**, "engine
+  off" == "power cut". The firmware therefore needs **hold-up capacitance** (or
+  gap-reconstruction on next boot) to write `ended_at` and flush the final
+  snapshot — otherwise every trip silently loses its tail. (Firmware concern,
+  noted here so the backend expects possibly-missing trip tails.)
+
+If you drive A→B→C without shutting the engine off, that's **one trip**,
+decomposed into:
 
 - **legs** — the moving segments (A→B, B→C). Each carries its own distance and
   fuel from cumulative snapshots, so per-leg consumption is real, not a
@@ -179,11 +249,11 @@ easy to conflate):
 - *Fuel:* `0.802 + 0.372` (legs) `+ 0.039` (stop idle) `= 1.213` ✓
 - *Distance:* `8.10 + 6.72 = 14.82` ✓
 - *Time:* leg 1 `648s` + stop dwell `249s` + leg 2 `458s` `= 1355s` = `duration_seconds` ✓.
-  Note `idle_seconds: 210` is **not** part of that sum — it's the in-leg idling
-  *contained within* the 648 + 458 s of moving-leg time, a subset, not an
+  Note `in_leg_idle_seconds: 210` is **not** part of that sum — it's the in-leg
+  idling *contained within* the 648 + 458 s of moving-leg time, a subset, not an
   additional term. Total stationary time for this trip is therefore
-  `210` (in-leg) `+ 249` (stop dwell) `= 459s`, and `idle_seconds < dwell_seconds`
-  is expected, not a contradiction.
+  `210` (in-leg) `+ 249` (stop dwell) `= 459s`, and
+  `in_leg_idle_seconds < dwell_seconds` is expected, not a contradiction.
 
 **Idempotency:** the RPC upserts on `client_trip_id`
 (`on conflict do update`). Re-posting the same trip — retries, double
@@ -198,60 +268,75 @@ server-computed. Leg/stop costs are stamped by the same trigger that prices
 trips, against the fuel price on the trip's Dubai-local date, so a leg is
 always costed at the same rate as its parent trip.
 
-## Ingestion contract — refuel events (device → Supabase)
+## Refuels: manual and incomplete
 
-The device continuously samples the OBD fuel-level PID (a tank-fill %). A
-refuel is detected on-device as the level **rising** (driving only lowers it).
-Each detected refuel is POSTed **once** to the `ingest_refuel` RPC:
+**Automatic refuel detection is impossible on this car — this is closed, not a
+TODO.** The old design watched PID `0x2F` (fuel tank level) rise. That PID is
+**not supported by the Koleos**: zero responses across the 45-minute OBD survey,
+and blank in Car Scanner with the Renault vehicle profile selected. Verified
+twice.
+
+So refuels are **entered manually**, and the primary input is **AED paid**, not
+litres. UAE 95 Special is government-set monthly and uniform nationwide, and
+`fuel_prices` already stores it by effective date, so litres are **derived
+exactly** (not estimated, unlike everything MAF-based):
 
 ```
-POST {SUPABASE_URL}/rest/v1/rpc/ingest_refuel
-apikey: {SUPABASE_SECRET_KEY}
-Authorization: Bearer {SUPABASE_SECRET_KEY}
-Content-Type: application/json
+liters_added = amount_paid_aed / price_per_liter   (on the refuel's Dubai-local date)
 ```
 
-```json
-{
-  "payload": {
-    "client_refuel_id": "koleos-rf-20260709-1930",
-    "car_id": 1,
-    "detected_at": "2026-07-09T19:30:00+04:00",
-    "lat": 25.1105,
-    "lon": 55.1985,
-    "level_before_pct": 22.0,
-    "level_after_pct": 88.0
-  }
-}
-```
+Amount paid is also the *easier* thing to capture — people remember what they
+paid, and it shows up on receipts and bank SMS.
+
+### The data is permanently incomplete — and the system knows it
+
+**Multiple people drive this car and will not reliably log fills.** The system
+never assumes it has every refuel. A missed fill would make the tank-to-tank
+cross-check **confidently wrong** rather than merely absent (litres at C ÷
+distance A→C silently omits an unlogged fill B). Wrong-with-confidence is worse
+than missing, so the design is defensive:
+
+- **`is_full_tank`** — tank-to-tank math is only valid between two *full* fills.
+- **Tank-capacity gap detection** — if MAF-estimated burn between two full fills
+  exceeds `cars.tank_capacity_liters` (× 1.05), a fill was missed (the car can't
+  burn more than a tankful between full fills). This needs zero cooperation.
+- **GPS probable-refuel flags** — a short engine-on stop at a petrol station
+  (`trip_stops.probable_refuel`, matched against `fuel_stations`) with no logged
+  refuel inside an interval invalidates that interval. Activates when GPS lands.
+- **Invalid intervals are excluded** from the cross-check and **surfaced**
+  ("N intervals excluded — suspected unlogged refuel"), never averaged in.
+
+**Logged refuel spend is a floor, not a total.** The dashboard labels it so.
+
+### Entry shape
+
+Written from the dashboard via a **server action** holding the secret key
+server-side (the browser key stays read-only; RLS unchanged), which calls the
+idempotent `ingest_refuel` RPC. Manual entries use a generated UUID as
+`client_refuel_id`.
 
 | Field | Required | Notes |
 |---|---|---|
-| `client_refuel_id` | yes | Device-generated, globally unique. **The idempotency key.** |
-| `car_id` | yes* | *Or send `device_id`; the RPC resolves the car from `cars.device_id`. |
-| `detected_at` | yes | ISO-8601 with offset. Cost is priced against this instant's Dubai-local date. |
-| `level_before_pct`, `level_after_pct` | recommended | Tank-fill % before/after. The DB derives litres: `(after − before)/100 × cars.tank_capacity_liters`. |
-| `liters_added_est` | optional | Send only if the device computes litres itself; it then **overrides** the %-based derivation. Otherwise omit and let the DB derive it. |
-| `lat`, `lon` | optional | Pump location; shown as a pin/link on the dashboard. |
+| `client_refuel_id` | yes | UUID; the idempotency key. |
+| `car_id` | yes* | *Or `device_id`. |
+| `refueled_at` | yes | When the fill happened (ISO-8601 with offset). Priced against its Dubai-local date. |
+| `amount_paid_aed` | yes | **Primary input** — what was paid. Litres derived from it. |
+| `is_full_tank` | default true | Only full-to-full intervals feed the cross-check. |
+| `odometer_km` | optional | Sharpens interval distance when both endpoints have it. |
+| `liters_added_override` | optional | Exact pump litres if known; **wins** over the derived value. |
+| `lat`, `lon` | optional | The station; pinned on the trip map. |
 
-**Litres are an estimate — treat them as coarse, not precise.** The tank-level
-PID (typically `0x2F`) is usually reported in **chunky 5–10% steps**, is
-**slosh-damped and lagged** by the ECU (the % keeps settling for seconds after
-you stop fuelling), and the sender is **non-linear near full/empty**. So a
-"22% → 88%" reading turning into ~40 L inherits all of that quantization: the
-litre figure is good to roughly a few litres, not to the decimal. This is a
-"set expectations" caveat, not a defect — the tank-to-tank cross-check exists
-precisely to *quantify* this drift against real distance driven. Don't build
-anything that assumes refuel litres are exact.
+Server-computed (don't send): `liters_added`, `fuel_price_id`, `entered_at`,
+`created_at`. If no price exists for the date yet, `liters_added` is left null
+and **backfilled** when the price is added (same late-price cascade as trips).
 
-**Idempotency:** upserts on `client_refuel_id`, so retries update the same row
-instead of duplicating.
+**Known caveat:** a pump transaction that includes non-fuel purchases (snacks,
+car wash) inflates the derived litres. The capacity check catches gross cases;
+otherwise treat derived litres as "at most this much fuel".
 
-Fields the device must **not** send: `id`, `fuel_price_id`, `cost_est_aed`,
-`created_at` — all server-computed. `cost_est_aed = liters_added_est ×
-price_per_liter` on the refuel's Dubai-local date, via a trigger mirroring the
-trip-cost logic. `tank_capacity_liters` lives on `cars` (seeded 60.0 for the
-Koleos — **verify against the owner's manual**; it scales every refuel).
+`tank_capacity_liters` on `cars` (seeded 60.0 — **verify against the owner's
+manual**) no longer converts % to litres; it now bounds the missed-refuel check,
+so its accuracy still matters.
 
 ## Dashboard
 

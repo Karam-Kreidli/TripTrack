@@ -1,12 +1,19 @@
 import Link from "next/link";
 import DashboardControls from "@/components/DashboardControls";
+import RefuelEntryForm from "@/components/RefuelEntryForm";
 import RefuelLog from "@/components/RefuelLog";
 import TankToTankCheck from "@/components/TankToTankCheck";
 import CostPerRefuelChart from "@/components/charts/CostPerRefuelChart";
 import CumulativeSpendChart from "@/components/charts/CumulativeSpendChart";
 import { fmtNum } from "@/lib/format";
 import { resolvePeriod } from "@/lib/periods";
-import { getRefuels, getTankWindows } from "@/lib/queries";
+import {
+  getCars,
+  getCurrentFuelPrice,
+  getProbableRefuelStops,
+  getRefuels,
+  getTankWindows,
+} from "@/lib/queries";
 
 export const dynamic = "force-dynamic";
 
@@ -44,37 +51,71 @@ export default async function RefuelsPage({
 
   // Log / spend / chart respect the period. The cross-check uses all data so
   // tank-to-tank windows aren't clipped at the period boundary.
-  const [refuels, windows] = await Promise.all([
-    getRefuels({ from: period.from, to: period.to }),
-    getTankWindows(),
-  ]);
+  const [refuels, windows, cars, currentPrice, probableStops] =
+    await Promise.all([
+      getRefuels({ from: period.from, to: period.to }),
+      getTankWindows(),
+      getCars(),
+      getCurrentFuelPrice(),
+      getProbableRefuelStops(),
+    ]);
 
-  const priced = refuels.filter((r) => r.cost_est_aed != null);
-  const totalSpend = priced.reduce((s, r) => s + Number(r.cost_est_aed), 0);
-  const totalLiters = refuels.reduce(
-    (s, r) => s + Number(r.liters_added_est ?? 0),
+  const totalSpend = refuels.reduce(
+    (s, r) => s + Number(r.amount_paid_aed ?? 0),
     0
   );
-  const avgFill =
-    priced.length > 0 ? totalSpend / priced.length : null;
+  const totalLiters = refuels.reduce(
+    (s, r) => s + Number(r.liters_added ?? 0),
+    0
+  );
+  const avgFill = refuels.length > 0 ? totalSpend / refuels.length : null;
+
+  const excludedIntervals = windows.filter((w) => !w.valid).length;
 
   return (
     <div className="space-y-6">
-      <DashboardControls
-        rangeKey={period.key}
-        fromDay={period.fromDay}
-        toDay={period.toDay}
-        basePath="/refuels"
-      />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <DashboardControls
+          rangeKey={period.key}
+          fromDay={period.fromDay}
+          toDay={period.toDay}
+          basePath="/refuels"
+        />
+        <RefuelEntryForm cars={cars} currentPrice={currentPrice} />
+      </div>
+
+      {/* Incompleteness is a first-class fact, not hidden: other drivers won't
+          log fills, so this page is a floor, never a total. */}
+      <div className="rounded-lg border border-[var(--tt-border)] bg-[var(--tt-surface)] px-3 py-2 text-xs text-[var(--tt-muted)]">
+        Logged refuels only — <span className="text-foreground">not total spend</span>.
+        Multiple drivers use this car and logging is voluntary, so fills are
+        missing. Litres are derived exactly from the month&apos;s government-set
+        UAE price.
+        {excludedIntervals > 0 && (
+          <>
+            {" "}
+            <span className="text-[#f5a524]">
+              {excludedIntervals} cross-check interval
+              {excludedIntervals === 1 ? "" : "s"} excluded (suspected gap).
+            </span>
+          </>
+        )}
+        {probableStops.length > 0 && (
+          <>
+            {" "}
+            {probableStops.length} probable-refuel stop
+            {probableStops.length === 1 ? "" : "s"} detected from GPS.
+          </>
+        )}
+      </div>
 
       {refuels.length === 0 && windows.length === 0 ? (
         <div className="rounded-xl border border-[var(--tt-border)] bg-[var(--tt-surface)] p-8 text-center text-sm text-[var(--tt-muted)]">
           <p className="mb-1 font-medium text-foreground">
-            No refuels in “{period.label}”.
+            No refuels logged in “{period.label}”.
           </p>
           <p>
-            Refuels appear here once the device detects a rising fuel level and
-            uploads the event. Try{" "}
+            Use “Log a refuel” above to add one, or try{" "}
             <Link href="/refuels?range=all" className="underline">
               All time
             </Link>
@@ -84,14 +125,14 @@ export default async function RefuelsPage({
       ) : (
         <>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <SpendTile label="Refuels" value={String(refuels.length)} />
+            <SpendTile label="Logged refuels" value={String(refuels.length)} />
             <SpendTile
-              label="Total pump spend"
+              label="Logged spend (not total)"
               value={fmtNum(totalSpend, 2)}
               unit="AED"
             />
             <SpendTile
-              label="Litres pumped"
+              label="Litres (derived)"
               value={fmtNum(totalLiters, 1)}
               unit="L"
             />
