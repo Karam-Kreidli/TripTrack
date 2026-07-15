@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import NavBar from "@/components/NavBar";
+import CarPicker from "@/components/CarPicker";
+import { getCars } from "@/lib/queries";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -18,11 +20,20 @@ export const metadata: Metadata = {
   description: "Per-ride fuel cost tracking for the Koleos",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // The car picker lives in the shared shell. Don't let a cars fetch failure
+  // take down every page — degrade to no picker.
+  let cars: Awaited<ReturnType<typeof getCars>> = [];
+  try {
+    cars = await getCars();
+  } catch {
+    cars = [];
+  }
+
   return (
     <html
       lang="en"
@@ -33,6 +44,7 @@ export default function RootLayout({
         <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6">
           {children}
         </main>
+        <CarPicker cars={cars} currentCarId={cars[0]?.id} />
       </body>
     </html>
   );

@@ -16,3 +16,20 @@ export function getSupabase(): SupabaseClient {
 
   return createClient(url, key, { auth: { persistSession: false } });
 }
+
+// Privileged client for the sanctioned write paths (e.g. add_car). Uses the
+// secret key, which must NEVER reach the browser — so this may only be called
+// from server code (server actions / route handlers), never a client component.
+export function getServiceSupabase(): SupabaseClient {
+  const url =
+    process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SECRET_KEY;
+
+  if (!url || !key) {
+    throw new Error(
+      "Writes are not configured: set SUPABASE_SECRET_KEY (and SUPABASE_URL) in .env.local. See .env.example."
+    );
+  }
+
+  return createClient(url, key, { auth: { persistSession: false } });
+}

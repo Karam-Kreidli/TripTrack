@@ -9,6 +9,7 @@ export interface Car {
   fuel_type: string;
   device_id: string | null;
   tank_capacity_liters: number | null;
+  image_url: string | null;
   created_at: string;
 }
 

@@ -137,14 +137,25 @@ export async function getTankWindows(): Promise<TankWindow[]> {
     const fromMs = new Date(prev.detected_at).getTime();
     const toMs = new Date(cur.detected_at).getTime();
 
+    // The car isn't switched off between errands or across refuels, so a fill
+    // often lands *inside* a trip. Attributing a whole trip to whichever window
+    // its start falls in would dump the spanning trip entirely on one side and
+    // misstate consumption around every fill-up. Instead, count only the share
+    // of each trip whose time overlaps [from, to), splitting the trip at the
+    // refuel instant. (Time-proportional: exact if the trip's rate is roughly
+    // constant; leg-level attribution would refine this further.)
     let distanceKm = 0;
     let integratedLiters = 0;
     for (const t of trips) {
       const ts = new Date(t.started_at).getTime();
-      if (ts > fromMs && ts <= toMs) {
-        distanceKm += Number(t.distance_km);
-        integratedLiters += Number(t.fuel_used_liters);
-      }
+      const te = new Date(t.ended_at).getTime();
+      const span = te - ts;
+      const overlap = Math.min(te, toMs) - Math.max(ts, fromMs);
+      if (overlap <= 0) continue;
+      // A zero/negative-span trip that falls in the window counts wholly.
+      const frac = span > 0 ? overlap / span : 1;
+      distanceKm += Number(t.distance_km) * frac;
+      integratedLiters += Number(t.fuel_used_liters) * frac;
     }
     if (distanceKm <= 0) continue;
 

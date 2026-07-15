@@ -111,11 +111,45 @@ Field notes:
 | `client_trip_id` | yes | Generated on the device, globally unique (e.g. device id + start timestamp). **The idempotency key.** |
 | `car_id` | yes* | *Or send `device_id` instead; the RPC resolves the car from `cars.device_id`. |
 | `started_at`, `ended_at` | yes | ISO-8601 with offset. Send the real wall-clock offset (`+04:00`); cost pricing is done against the Dubai-local date. |
-| `duration_seconds`, `distance_km`, `fuel_used_liters` | yes | `l_per_100km` is derived in the database — don't send it. |
-| `idle_seconds`, `avg_speed_kmh`, `max_speed_kmh`, `start/end_lat/lon`, `notes` | no | `notes` is free-form JSON. |
+| `duration_seconds`, `distance_km`, `fuel_used_liters` | yes | `l_per_100km` is derived in the database — don't send it. See the source note below on `distance_km` and `fuel_used_liters` — they're the two signals every headline number rests on. |
+| `idle_seconds` | no | **In-leg idle only** — engine-on-but-stationary time *within the moving legs* (traffic lights, brief halts below the stop threshold). It **excludes** flagged-stop dwell, which is carried separately by each stop's `dwell_seconds`. So total stationary time = `idle_seconds` + Σ `stops.dwell_seconds`; consequently `idle_seconds` can be (and usually is) **less** than any single stop's dwell. Don't conflate the two. |
+| `avg_speed_kmh`, `max_speed_kmh`, `start/end_lat/lon`, `notes` | no | `notes` is free-form JSON. |
 | `route_points[]` | no | `seq` starts at 0 and must be unique per trip; `speed_kmh` optional. |
 | `legs[]` | no | The moving segments between stops (A→B, B→C…). One ignition session with two stops = three legs; a stop-free trip has one leg or none. `seq` starts at 1. Send `distance_km` + `fuel_used_liters` from cumulative-odometer/fuel snapshots at each boundary — do **not** send `l_per_100km` or `cost_aed`; both are server-computed. |
 | `stops[]` | no | Stationary dwells within the trip (engine running), detected when speed ≈ 0 past the dwell threshold. `dwell_seconds` and `idle_fuel_liters` are what qualify a location as a real stop vs. a traffic light. Don't send `idle_cost_aed` — server-computed. |
+
+### Where these numbers come from (signal sources)
+
+The schema receives `distance_km` and `fuel_used_liters` as givens, but **every
+headline figure — trip/leg/idle cost, L/100km — derives from them**, so the
+device is responsible for choosing the right source. This isn't cosmetic; it
+sets the error floor.
+
+- **`distance_km` — prefer integrated OBD speed (PID `0x0D`, universally
+  supported).** Integrating vehicle speed over time is the more trustworthy
+  basis for *distance*. Use **GPS for the route shape only** (the
+  `route_points[]` polyline), not for the odometer figure: GPS jitter while
+  stationary accumulates **phantom distance** and can register a "moving"
+  reading at 0 actual km/h, which both inflates distance and muddies stop
+  detection. If you must derive distance from GPS-haversine, expect a different
+  (and generally worse) error profile — state which you used in `notes`.
+
+- **`fuel_used_liters` — this is the load-bearing, least-certain signal.**
+  The whole dataset rests on it, and how the car exposes fuel decides whether
+  your numbers are *measured*, *approximated*, or *impossible*, in descending
+  quality:
+  1. **Direct fuel-rate PID (`0x5E`)** — engine fuel rate in L/h, integrate over
+     time. Best case; the figure is genuinely measured.
+  2. **MAF-derived (`0x10` + assumed air-fuel ratio)** — compute fuel from mass
+     air flow and a stoichiometric AFR fudge factor. Works, but carries more
+     error and needs calibration against known fill-ups.
+  3. **Neither** — you're reduced to a fixed economy constant × distance, which
+     guts the premise (you'd be *assuming* consumption, then "discovering" it).
+
+  **Probe this with the ELM327 on day one** — it's the single measurement that
+  determines whether TripTrack is measuring reality or narrating an assumption.
+  Which PIDs the Koleos (Renault/Samsung-derived) actually exposes is not
+  safely assertable from memory; verify on the car, don't trust a spec sheet.
 
 ### Legs & stops: the decomposition model
 
@@ -138,6 +172,18 @@ trip.cost_aed         = Σ legs.cost_aed         + Σ stops.idle_cost_aed
 
 If those don't reconcile, a snapshot was dropped. `legs[]`/`stops[]` are
 optional — omit them and the trip is just its flat totals as before.
+
+**Reconciling the example** (so the two time budgets are clear, since they're
+easy to conflate):
+
+- *Fuel:* `0.802 + 0.372` (legs) `+ 0.039` (stop idle) `= 1.213` ✓
+- *Distance:* `8.10 + 6.72 = 14.82` ✓
+- *Time:* leg 1 `648s` + stop dwell `249s` + leg 2 `458s` `= 1355s` = `duration_seconds` ✓.
+  Note `idle_seconds: 210` is **not** part of that sum — it's the in-leg idling
+  *contained within* the 648 + 458 s of moving-leg time, a subset, not an
+  additional term. Total stationary time for this trip is therefore
+  `210` (in-leg) `+ 249` (stop dwell) `= 459s`, and `idle_seconds < dwell_seconds`
+  is expected, not a contradiction.
 
 **Idempotency:** the RPC upserts on `client_trip_id`
 (`on conflict do update`). Re-posting the same trip — retries, double
@@ -188,8 +234,15 @@ Content-Type: application/json
 | `liters_added_est` | optional | Send only if the device computes litres itself; it then **overrides** the %-based derivation. Otherwise omit and let the DB derive it. |
 | `lat`, `lon` | optional | Pump location; shown as a pin/link on the dashboard. |
 
-**Litres are an estimate** — fuel senders are non-linear near full/empty. That's
-acceptable; the tank-to-tank cross-check exists precisely to quantify the drift.
+**Litres are an estimate — treat them as coarse, not precise.** The tank-level
+PID (typically `0x2F`) is usually reported in **chunky 5–10% steps**, is
+**slosh-damped and lagged** by the ECU (the % keeps settling for seconds after
+you stop fuelling), and the sender is **non-linear near full/empty**. So a
+"22% → 88%" reading turning into ~40 L inherits all of that quantization: the
+litre figure is good to roughly a few litres, not to the decimal. This is a
+"set expectations" caveat, not a defect — the tank-to-tank cross-check exists
+precisely to *quantify* this drift against real distance driven. Don't build
+anything that assumes refuel litres are exact.
 
 **Idempotency:** upserts on `client_refuel_id`, so retries update the same row
 instead of duplicating.
