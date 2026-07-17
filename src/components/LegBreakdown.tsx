@@ -1,16 +1,32 @@
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { fmtAED, fmtDuration, fmtNum, fmtTime } from "@/lib/format";
 import type { TripLeg, TripStop } from "@/types/db";
+import { mergeStop } from "@/app/actions/trips";
 
 // Per-leg + per-stop breakdown of one ignition session (A->B->C...). Legs are
 // the moving segments; stops are the dwells with their idle-fuel waste. Shown
 // interleaved in time order so it reads as A → [stop] → B → [stop] → C.
+//
+// Edit mode lets you remove a falsely-flagged stop (e.g. a long light that
+// tripped the dwell threshold): the two legs it split are merged and its idle
+// fuel folds into the drive, so the trip total is unchanged.
 export default function LegBreakdown({
+  tripId,
   legs,
   stops,
 }: {
+  tripId: string;
   legs: TripLeg[];
   stops: TripStop[];
 }) {
+  const router = useRouter();
+  const [editing, setEditing] = useState(false);
+  const [busySeq, setBusySeq] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
   if (legs.length === 0) return null;
 
   const drivingFuel = legs.reduce((s, l) => s + Number(l.fuel_used_liters), 0);
@@ -19,6 +35,18 @@ export default function LegBreakdown({
   const idleCost = stops.reduce((s, st) => s + Number(st.idle_cost_aed ?? 0), 0);
   const totalFuel = drivingFuel + idleFuel;
   const idlePct = totalFuel > 0 ? (idleFuel / totalFuel) * 100 : 0;
+
+  async function onRemoveStop(seq: number) {
+    setBusySeq(seq);
+    setError(null);
+    const result = await mergeStop(tripId, seq);
+    setBusySeq(null);
+    if (result.ok) {
+      router.refresh();
+    } else {
+      setError(result.error);
+    }
+  }
 
   // Interleave: leg 1, stop 1, leg 2, stop 2, ...
   const rows: Array<
@@ -32,17 +60,41 @@ export default function LegBreakdown({
 
   return (
     <section className="rounded-xl border border-[var(--tt-border)] bg-[var(--tt-surface)] p-4">
-      <div className="mb-3 flex items-baseline justify-between">
+      <div className="mb-3 flex items-baseline justify-between gap-2">
         <h2 className="text-sm font-semibold">
           Legs &amp; stops
           <span className="ml-2 font-normal text-[var(--tt-muted)]">
             {legs.length} legs · {stops.length} stops
           </span>
         </h2>
+        {stops.length > 0 && (
+          <button
+            onClick={() => {
+              setEditing((e) => !e);
+              setError(null);
+            }}
+            className="shrink-0 rounded-md px-2 py-1 text-xs text-[var(--tt-muted)] transition-colors hover:bg-white/5 hover:text-foreground"
+          >
+            {editing ? "Done" : "Edit"}
+          </button>
+        )}
       </div>
 
+      {editing && (
+        <p className="mb-3 rounded-md bg-white/5 px-3 py-2 text-xs text-[var(--tt-muted)]">
+          Remove a stop that wasn&apos;t really one — its two legs merge into a
+          single drive and its idle fuel folds in, leaving the trip total
+          unchanged.
+        </p>
+      )}
+      {error && (
+        <p className="mb-3 rounded-md bg-[#f87171]/10 px-3 py-2 text-xs text-[#f87171]">
+          {error}
+        </p>
+      )}
+
       <ol className="space-y-2">
-        {rows.map((row, i) =>
+        {rows.map((row) =>
           row.kind === "leg" ? (
             <li
               key={`leg-${row.data.id}`}
@@ -83,9 +135,19 @@ export default function LegBreakdown({
                 Stopped {fmtDuration(row.data.dwell_seconds)} · idle{" "}
                 {fmtNum(row.data.idle_fuel_liters, 3)} L wasted
               </div>
-              <div className="shrink-0 text-right text-xs font-medium tabular-nums text-[#f87171]">
-                {fmtAED(row.data.idle_cost_aed)}
-              </div>
+              {editing ? (
+                <button
+                  onClick={() => onRemoveStop(row.data.seq)}
+                  disabled={busySeq != null}
+                  className="shrink-0 rounded-md border border-[#f87171]/40 px-2 py-1 text-xs font-medium text-[#f87171] transition-colors hover:bg-[#f87171]/10 disabled:opacity-50"
+                >
+                  {busySeq === row.data.seq ? "Merging…" : "Remove & merge"}
+                </button>
+              ) : (
+                <div className="shrink-0 text-right text-xs font-medium tabular-nums text-[#f87171]">
+                  {fmtAED(row.data.idle_cost_aed)}
+                </div>
+              )}
             </li>
           )
         )}

@@ -31,12 +31,18 @@ function Item({ label, value }: { label: string; value: string }) {
 
 export default async function TripDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ back?: string }>;
 }) {
   const { id } = await params;
+  const { back } = await searchParams;
   const trip = await getTrip(id);
   if (!trip) notFound();
+
+  // Return to the exact filtered/sorted list the user came from, if provided.
+  const backHref = back ? `/trips?${back}` : "/trips";
 
   const [points, legs, stops, tripRefuels] = await Promise.all([
     getRoutePoints(trip.id),
@@ -93,7 +99,7 @@ export default async function TripDetailPage({
   return (
     <div className="space-y-4">
       <div>
-        <Link href="/trips" className="text-sm text-[var(--tt-muted)] hover:underline">
+        <Link href={backHref} className="text-sm text-[var(--tt-muted)] hover:underline">
           &larr; All trips
         </Link>
         <h1 className="mt-1 text-xl font-semibold tracking-tight">
@@ -116,7 +122,7 @@ export default async function TripDetailPage({
         <Item label="Uploaded" value={fmtDateTime(trip.uploaded_at)} />
       </dl>
 
-      <LegBreakdown legs={legs} stops={stops} />
+      <LegBreakdown tripId={trip.id} legs={legs} stops={stops} />
 
       <div className="h-96 overflow-hidden rounded-xl border border-[var(--tt-border)] bg-[var(--tt-surface)]">
         {path.length > 0 ? (

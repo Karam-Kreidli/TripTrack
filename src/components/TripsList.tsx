@@ -39,14 +39,26 @@ interface DayGroup {
   cost: number;
 }
 
-function TripRow({ t }: { t: Trip }) {
+function LegBadge({ legs }: { legs: number }) {
+  if (legs <= 1) return null;
+  return (
+    <span className="rounded-full bg-[var(--tt-accent)]/15 px-1.5 py-0.5 text-[10px] font-medium text-[var(--tt-accent)]">
+      {legs} legs
+    </span>
+  );
+}
+
+function TripRow({ t, href, legs }: { t: Trip; href: string; legs: number }) {
   return (
     <Link
-      href={`/trips/${t.id}`}
+      href={href}
       className="flex items-center justify-between gap-4 rounded-xl border border-[var(--tt-border)] bg-[var(--tt-surface)] px-4 py-3 transition-colors hover:border-white/20 hover:bg-white/[.04]"
     >
       <div className="min-w-0">
-        <div className="font-medium tabular-nums">{fmtTime(t.started_at)}</div>
+        <div className="flex items-center gap-2 font-medium tabular-nums">
+          {fmtTime(t.started_at)}
+          <LegBadge legs={legs} />
+        </div>
         <div className="mt-0.5 text-xs text-[var(--tt-muted)] tabular-nums">
           {fmtDuration(t.duration_seconds)}
         </div>
@@ -72,14 +84,17 @@ function TripRow({ t }: { t: Trip }) {
 }
 
 // Flat row that also shows its date (used by the ranked, non-grouped sorts).
-function FlatTripRow({ t }: { t: Trip }) {
+function FlatTripRow({ t, href, legs }: { t: Trip; href: string; legs: number }) {
   return (
     <Link
-      href={`/trips/${t.id}`}
+      href={href}
       className="flex items-center justify-between gap-4 rounded-xl border border-[var(--tt-border)] bg-[var(--tt-surface)] px-4 py-3 transition-colors hover:border-white/20 hover:bg-white/[.04]"
     >
       <div className="min-w-0">
-        <div className="font-medium">{fmtDate(t.started_at)}</div>
+        <div className="flex items-center gap-2 font-medium">
+          {fmtDate(t.started_at)}
+          <LegBadge legs={legs} />
+        </div>
         <div className="mt-0.5 text-xs text-[var(--tt-muted)] tabular-nums">
           {fmtTime(t.started_at)} · {fmtDuration(t.duration_seconds)}
         </div>
@@ -106,11 +121,13 @@ function FlatTripRow({ t }: { t: Trip }) {
 
 export default function TripsList({
   trips,
+  legCounts,
   rangeKey,
   fromDay,
   toDay,
 }: {
   trips: Trip[];
+  legCounts: Record<string, number>;
   rangeKey: RangeKey;
   fromDay?: string;
   toDay?: string;
@@ -163,6 +180,14 @@ export default function TripsList({
   const isCustom = rangeKey === "custom";
   const customLabel =
     isCustom && fromDay && toDay ? `${fromDay} → ${toDay}` : "Custom";
+
+  // Carry the current filter/sort into each trip link as `back`, so the detail
+  // page's "All trips" link returns to this exact view rather than bare /trips.
+  const currentQs = params.toString();
+  const tripHref = (id: string) =>
+    currentQs
+      ? `/trips/${id}?back=${encodeURIComponent(currentQs)}`
+      : `/trips/${id}`;
 
   // Grouped-by-day view (newest day first, trips within a day newest first).
   const groups = useMemo<DayGroup[]>(() => {
@@ -338,7 +363,7 @@ export default function TripsList({
                     <ul className="space-y-2">
                       {g.trips.map((t) => (
                         <li key={t.id}>
-                          <TripRow t={t} />
+                          <TripRow t={t} href={tripHref(t.id)} legs={legCounts[t.id] ?? 0} />
                         </li>
                       ))}
                     </ul>
@@ -350,7 +375,7 @@ export default function TripsList({
             <ul className="space-y-2">
               {flat.map((t) => (
                 <li key={t.id}>
-                  <FlatTripRow t={t} />
+                  <FlatTripRow t={t} href={tripHref(t.id)} legs={legCounts[t.id] ?? 0} />
                 </li>
               ))}
             </ul>

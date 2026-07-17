@@ -70,6 +70,19 @@ export async function getTripLegs(tripId: string): Promise<TripLeg[]> {
   return data as TripLeg[];
 }
 
+// Leg count per trip, for the multi-leg badge on the trips list. One query for
+// all trips (grouped client-side) rather than N per-trip queries.
+export async function getLegCounts(): Promise<Map<string, number>> {
+  const sb = getSupabase();
+  const { data, error } = await sb.from("trip_legs").select("trip_id").limit(50000);
+  if (error) fail("Loading leg counts failed", error.message);
+  const counts = new Map<string, number>();
+  for (const row of (data as { trip_id: string }[]) ?? []) {
+    counts.set(row.trip_id, (counts.get(row.trip_id) ?? 0) + 1);
+  }
+  return counts;
+}
+
 export async function getTripStops(tripId: string): Promise<TripStop[]> {
   const sb = getSupabase();
   const { data, error } = await sb
