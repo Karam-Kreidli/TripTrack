@@ -20,11 +20,20 @@ import {
 
 export const dynamic = "force-dynamic";
 
-function Item({ label, value }: { label: string; value: string }) {
+function Item({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+}) {
   return (
     <div>
       <dt className="text-xs text-[var(--tt-muted)]">{label}</dt>
       <dd className="mt-0.5 font-medium tabular-nums">{value}</dd>
+      {hint && <dd className="mt-0.5 text-[10px] text-[var(--tt-muted)]">{hint}</dd>}
     </div>
   );
 }
@@ -113,14 +122,54 @@ export default async function TripDetailPage({
 
       <dl className="grid grid-cols-2 gap-x-4 gap-y-4 rounded-xl border border-[var(--tt-border)] bg-[var(--tt-surface)] p-4 sm:grid-cols-3 lg:grid-cols-4">
         <Item label="Distance" value={`${fmtNum(trip.distance_km, 2)} km`} />
-        <Item label="Fuel used" value={`${fmtNum(trip.fuel_used_liters, 3)} L`} />
-        <Item label="Consumption" value={`${fmtNum(trip.l_per_100km, 2)} L/100km`} />
+        <Item
+          label="Fuel used"
+          value={`${fmtNum(trip.fuel_used_liters, 3)} L`}
+          hint="driving only · est."
+        />
+        <Item
+          label="Consumption"
+          value={`${fmtNum(trip.l_per_100km, 2)} L/100km`}
+          hint="parked idle excluded"
+        />
         <Item label="Cost" value={fmtAED(trip.cost_aed)} />
         <Item label="Avg speed" value={`${fmtNum(trip.avg_speed_kmh, 1)} km/h`} />
         <Item label="Max speed" value={`${fmtNum(trip.max_speed_kmh, 1)} km/h`} />
         <Item label="In-leg idle" value={fmtDuration(trip.in_leg_idle_seconds)} />
         <Item label="Uploaded" value={fmtDateTime(trip.uploaded_at)} />
       </dl>
+
+      {/* Parked idle: fuel wasted stationary with the engine running past the
+          5-min threshold. Distinct from in-leg idle (short halts at lights) and
+          already excluded from the driving fuel/consumption above. */}
+      {trip.parked_idle_fuel_liters != null &&
+        Number(trip.parked_idle_fuel_liters) > 0 && (
+          <div className="rounded-xl border border-[#f5a524]/30 bg-[#f5a524]/[.06] p-4">
+            <div className="flex items-baseline justify-between gap-2">
+              <h2 className="text-sm font-semibold text-[#f5a524]">
+                Parked idle — fuel burned going nowhere
+              </h2>
+              <span className="text-[10px] text-[var(--tt-muted)]">
+                MAF-derived estimate
+              </span>
+            </div>
+            <div className="mt-3 grid grid-cols-3 gap-4">
+              <Item
+                label="Time parked"
+                value={fmtDuration(trip.parked_idle_seconds)}
+              />
+              <Item
+                label="Fuel wasted"
+                value={`${fmtNum(trip.parked_idle_fuel_liters, 3)} L`}
+              />
+              <Item label="Cost" value={fmtAED(trip.parked_idle_cost_aed)} />
+            </div>
+            <p className="mt-3 text-xs text-[var(--tt-muted)]">
+              Excluded from the driving stats above — the trip&apos;s distance,
+              fuel, and L/100km describe actual driving only.
+            </p>
+          </div>
+        )}
 
       <LegBreakdown tripId={trip.id} legs={legs} stops={stops} />
 

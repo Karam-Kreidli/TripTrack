@@ -23,9 +23,18 @@ export default function SummaryCards({ trips }: { trips: Trip[] }) {
   // Distance-weighted average, not a mean of per-trip figures.
   const avgConsumption =
     totalDistance > 0 ? (totalFuel / totalDistance) * 100 : null;
+  // Fuel wasted sitting parked (already excluded from the driving totals above).
+  const parkedFuel = trips.reduce(
+    (s, t) => s + Number(t.parked_idle_fuel_liters ?? 0),
+    0
+  );
+  const parkedCost = trips.reduce(
+    (s, t) => s + Number(t.parked_idle_cost_aed ?? 0),
+    0
+  );
 
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
       <StatTile label="Trips" value={String(trips.length)} />
       <StatTile label="Total distance" value={fmtNum(totalDistance, 1)} unit="km" />
       <StatTile label="Total fuel" value={fmtNum(totalFuel, 2)} unit="L" />
@@ -42,6 +51,11 @@ export default function SummaryCards({ trips }: { trips: Trip[] }) {
         label="Avg consumption"
         value={avgConsumption != null ? fmtNum(avgConsumption, 2) : "—"}
         unit="L/100km"
+      />
+      <StatTile
+        label={`Wasted parked idling · ${fmtNum(parkedCost, 2)} AED`}
+        value={fmtNum(parkedFuel, 2)}
+        unit="L"
       />
     </div>
   );

@@ -68,8 +68,12 @@ export interface Trip {
   ended_at: string;
   duration_seconds: number;
   distance_km: number;
-  fuel_used_liters: number;
+  fuel_used_liters: number; // DFCO-corrected, parked-idle-excluded — driving only
   in_leg_idle_seconds: number | null;
+  parked_idle_seconds: number | null; // stationary + running past the 5-min threshold
+  parked_idle_fuel_liters: number | null; // fuel wasted parked, excluded from fuel_used_liters
+  parked_idle_cost_aed: number | null; // derived by the trip-cost trigger
+  fuel_used_liters_raw: number | null; // uncorrected total — diagnostic only
   avg_speed_kmh: number | null;
   max_speed_kmh: number | null;
   start_lat: number | null;
